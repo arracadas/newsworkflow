@@ -6,9 +6,21 @@ from worker.workflows.news.models import (
 )
 
 
-class FakeParsedResponse:
+class FakeParsedMessage:
     def __init__(self, parsed):
         self.parsed = parsed
+
+
+class FakeParsedChoice:
+    def __init__(self, parsed):
+        self.message = FakeParsedMessage(parsed)
+
+
+class FakeParsedResponse:
+    """Mimics mistralai's ParsedChatCompletionResponse: choices[0].message.parsed."""
+
+    def __init__(self, parsed):
+        self.choices = [FakeParsedChoice(parsed)]
 
 
 class FakeChat:

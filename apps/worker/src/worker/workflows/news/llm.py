@@ -24,6 +24,14 @@ FILTER_MODEL = "mistral-medium-latest"
 SUMMARY_MODEL = "mistral-large-latest"
 
 
+def _parsed(response, model: type) -> object:
+    choice = response.choices[0] if response.choices else None
+    parsed = choice.message.parsed if choice is not None and choice.message is not None else None
+    if parsed is None:
+        raise ValueError(f"LLM returned no parsed {model.__name__}")
+    return parsed
+
+
 async def expand_queries(client, topics: list[str]) -> ExpandedQueries:
     response = await client.chat.parse_async(
         model=EXPANSION_MODEL,
@@ -33,7 +41,7 @@ async def expand_queries(client, topics: list[str]) -> ExpandedQueries:
         ],
         response_format=ExpandedQueries,
     )
-    return response.parsed
+    return _parsed(response, ExpandedQueries)
 
 
 async def filter_sources(client, request: FilterRequest) -> FilteredSources:
@@ -45,7 +53,7 @@ async def filter_sources(client, request: FilterRequest) -> FilteredSources:
         ],
         response_format=FilteredSources,
     )
-    return response.parsed
+    return _parsed(response, FilteredSources)
 
 
 async def summarize_articles(client, request: SummaryRequest) -> ArticleSummaries:
@@ -57,7 +65,7 @@ async def summarize_articles(client, request: SummaryRequest) -> ArticleSummarie
         ],
         response_format=ArticleSummaries,
     )
-    return response.parsed
+    return _parsed(response, ArticleSummaries)
 
 
 def article_source(url: str) -> str:
