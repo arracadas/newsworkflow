@@ -27,6 +27,12 @@ All side effects (LLM calls, HTTP) live in activities; the workflow itself stays
 Returns a `NewsDigest`: per topic, the expanded queries and a list of articles
 (`title`, `url`, `source`, `summary`, `key_topics`).
 
+## `news-search`
+
+A minimal manual-trigger workflow: input `{"topic": "..."}` runs a web search for
+recent news about the topic and returns the top 5 results, each with `title`,
+`url`, and `snippet` (no LLM steps).
+
 ## Layout
 
 - `apps/worker/src/worker/workflows/news/` — models, prompts, DuckDuckGo search, LLM helpers,

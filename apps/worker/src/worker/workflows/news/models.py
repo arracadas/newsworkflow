@@ -7,6 +7,18 @@ MAX_CANDIDATES_PER_TOPIC = 10
 MAX_ARTICLES_PER_TOPIC = 5
 
 
+class NewsSearchInput(BaseModel):
+    topic: str = Field(min_length=1, description="The topic to search for recent news about.")
+
+    @field_validator("topic")
+    @classmethod
+    def _strip_topic(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("topic must not be empty")
+        return cleaned
+
+
 class NewsDigestInput(BaseModel):
     topics: list[str] = Field(
         min_length=1,
@@ -27,6 +39,12 @@ class SearchResult(BaseModel):
     title: str
     url: str
     snippet: str
+
+
+class NewsSearchOutput(BaseModel):
+    topic: str
+    query: str
+    results: list[SearchResult]
 
 
 class TopicQueries(BaseModel):

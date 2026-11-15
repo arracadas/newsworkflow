@@ -6,9 +6,12 @@ from worker.workflows.news import llm
 from worker.workflows.news.duckduckgo import search_duckduckgo
 from worker.workflows.news.models import (
     MAX_ARTICLES_PER_TOPIC,
+    MAX_RESULTS_PER_QUERY,
     ArticleSummary,
     CredibleArticle,
     FilterRequest,
+    NewsSearchInput,
+    NewsSearchOutput,
     QueryExpansion,
     SearchRequest,
     SummaryRequest,
@@ -34,6 +37,13 @@ async def expand_search_queries(topics: list[str]) -> QueryExpansion:
         generated_at=datetime.now(timezone.utc).isoformat(),
         topics=expanded.topics,
     )
+
+
+@workflows.activity(start_to_close_timeout=timedelta(seconds=60), retry_policy_max_attempts=3)
+async def search_recent_news(request: NewsSearchInput) -> NewsSearchOutput:
+    query = f"{request.topic} latest news"
+    results = await search_duckduckgo(query, max_results=MAX_RESULTS_PER_QUERY)
+    return NewsSearchOutput(topic=request.topic, query=query, results=results)
 
 
 @workflows.activity(start_to_close_timeout=timedelta(seconds=60), retry_policy_max_attempts=3)
