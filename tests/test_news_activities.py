@@ -2,21 +2,27 @@ import pytest
 from pydantic import ValidationError
 
 import mistralai.workflows as workflows
-from worker.workflows.news import activities, llm
-from worker.workflows.news.duckduckgo import parse_search_results, search_duckduckgo
+from worker.workflows.news import activities
+from worker.workflows.news.credibility import (
+    article_source,
+    filter_credible_results,
+    is_credible_source,
+)
+from worker.workflows.news.duckduckgo import (
+    SearchUnavailableError,
+    parse_search_results,
+    search_duckduckgo,
+)
 from worker.workflows.news.models import (
     MAX_ARTICLES_PER_TOPIC,
-    CredibleArticle,
-    FilterRequest,
     NewsDigestInput,
     SearchRequest,
-    SearchResult,
     SummaryRequest,
+    CredibleArticle,
 )
 
 from fakes import (
     DEFAULT_EXPANSION,
-    DEFAULT_FILTERED,
     DEFAULT_SUMMARIES,
     ExplodingClient,
     FakeMistralClient,
@@ -121,6 +127,53 @@ async def test_search_duckduckgo_falls_back_to_lite(monkeypatch):
     ]
 
 
+async def test_search_duckduckgo_raises_clear_error_when_all_endpoints_fail(monkeypatch):
+    import httpx
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, params=None):
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    with pytest.raises(SearchUnavailableError) as excinfo:
+        await search_duckduckgo("test query")
+    assert "Web search failed" in str(excinfo.value)
+    assert "test query" in str(excinfo.value)
+
+
+async def test_search_duckduckgo_empty_page_is_not_an_error(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        text = "<html><body>no results</body></html>"
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, params=None):
+            return FakeResponse()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    assert await search_duckduckgo("test query") == []
+
+
 async def test_expand_search_queries_activity(monkeypatch):
     client = FakeMistralClient({type(DEFAULT_EXPANSION): DEFAULT_EXPANSION})
     monkeypatch.setattr(activities, "_mistral_client", lambda: client)
@@ -129,7 +182,8 @@ async def test_expand_search_queries_activity(monkeypatch):
     assert expansion.generated_at.endswith("+00:00")
     assert [t.topic for t in expansion.topics] == ["ai", "climate"]
     call = client.chat.calls[0]
-    assert "2026 or later" in call["messages"][0]["content"]
+    assert "last 7 days" in call["messages"][0]["content"]
+    assert "exactly 2" in call["messages"][1]["content"]
     assert "ai" in call["messages"][1]["content"]
 
 
@@ -143,66 +197,87 @@ async def test_search_news_activity_returns_top_results(monkeypatch):
     assert result.topic == "ai"
     assert result.query == "ai news"
     assert len(result.results) == 5
-    assert all(isinstance(r, SearchResult) for r in result.results)
+    assert all(r.url.startswith("https://") for r in result.results)
 
 
-async def test_filter_credible_sources_drops_hallucinated_urls(monkeypatch):
+def test_is_credible_source_accepts_trusted_outlets():
+    for url in [
+        "https://www.reuters.com/world/story",
+        "https://apnews.com/article",
+        "https://www.bbc.com/news/story",
+        "https://www.ft.com/content",
+        "https://subdomain.theguardian.com/x",
+    ]:
+        assert is_credible_source(url), url
+
+
+def test_is_credible_source_rejects_social_media_and_aggregators():
+    for url in [
+        "https://twitter.com/user/status/1",
+        "https://x.com/user/status/1",
+        "https://reddit.com/r/news",
+        "https://news.google.com/read/x",
+        "https://facebook.com/page",
+        "https://randomblog.example.com/post",
+        "https://reuters.com.fake.example.com/post",
+        "",
+    ]:
+        assert not is_credible_source(url), url
+
+
+def test_filter_credible_results_dedupes_and_keeps_snippets():
+    from worker.workflows.news.models import SearchResult
+
     candidates = [
-        SearchResult(
-            title="Reuters story 0",
-            url="https://reuters.com/news/0",
-            snippet="Original Reuters snippet.",
-        ),
-        SearchResult(
-            title="BBC story 1",
-            url="https://bbc.com/news/1",
-            snippet="Original BBC snippet.",
-        ),
-        SearchResult(
-            title="Shady blog",
-            url="https://shady.example.com/post",
-            snippet="Untrusted snippet.",
-        ),
+        {
+            "title": "Reuters story",
+            "url": "https://www.reuters.com/news/0",
+            "snippet": "Reuters snippet.",
+        },
+        {
+            "title": "Blog story",
+            "url": "https://blog.example.com/post",
+            "snippet": "Blog snippet.",
+        },
+        {
+            "title": "Reuters duplicate",
+            "url": "https://www.reuters.com/news/0",
+            "snippet": "Duplicate snippet.",
+        },
+        {
+            "title": "BBC story",
+            "url": "https://www.bbc.com/news/1",
+            "snippet": "BBC snippet.",
+        },
     ]
-    client = FakeMistralClient({type(DEFAULT_FILTERED): DEFAULT_FILTERED})
-    monkeypatch.setattr(activities, "_mistral_client", lambda: client)
-    request = FilterRequest(topic="ai", results=candidates)
-    with workflows.run_activities_locally():
-        result = await activities.filter_credible_sources(request)
-    assert [a.url for a in result.articles] == [
-        "https://reuters.com/news/0",
-        "https://bbc.com/news/1",
+    articles = filter_credible_results([SearchResult(**c) for c in candidates])
+    assert [a.url for a in articles] == [
+        "https://www.reuters.com/news/0",
+        "https://www.bbc.com/news/1",
     ]
-    assert result.articles[0].snippet == "Original Reuters snippet."
-    assert result.articles[0].source == "Reuters"
-    assert "trusted" in client.chat.calls[0]["messages"][0]["content"].lower()
+    assert articles[0].title == "Reuters story"
+    assert articles[0].snippet == "Reuters snippet."
+    assert articles[0].source == "reuters.com"
+    assert all(isinstance(a, CredibleArticle) for a in articles)
 
 
-async def test_filter_credible_sources_empty_results_skips_llm(monkeypatch):
-    monkeypatch.setattr(activities, "_mistral_client", lambda: ExplodingClient())
-    with workflows.run_activities_locally():
-        result = await activities.filter_credible_sources(FilterRequest(topic="ai", results=[]))
-    assert result.articles == []
+def test_filter_credible_results_caps_articles_per_topic():
+    many = [
+        {
+            "title": f"Reuters story {i}",
+            "url": f"https://www.reuters.com/news/{i}",
+            "snippet": f"Snippet {i}.",
+        }
+        for i in range(MAX_ARTICLES_PER_TOPIC + 3)
+    ]
+    from worker.workflows.news.models import SearchResult
+
+    articles = filter_credible_results([SearchResult(**m) for m in many])
+    assert len(articles) == MAX_ARTICLES_PER_TOPIC
 
 
-async def test_filter_caps_articles_per_topic(monkeypatch):
-    from worker.workflows.news.models import CredibleArticle, FilteredSources
-
-    many = make_search_results("src", MAX_ARTICLES_PER_TOPIC + 3)
-    filtered = FilteredSources(
-        articles=[
-            CredibleArticle(
-                url=r.url, title=r.title, snippet=r.snippet, source="src.example.com", reason="ok"
-            )
-            for r in many
-        ]
-    )
-    monkeypatch.setattr(
-        activities, "_mistral_client", lambda: FakeMistralClient({FilteredSources: filtered})
-    )
-    with workflows.run_activities_locally():
-        result = await activities.filter_credible_sources(FilterRequest(topic="src", results=many))
-    assert len(result.articles) == MAX_ARTICLES_PER_TOPIC
+def test_article_source_strips_www():
+    assert article_source("https://www.reuters.com/a") == "reuters.com"
 
 
 async def test_summarize_articles_matches_by_url_and_falls_back_to_snippet(monkeypatch):
@@ -212,14 +287,12 @@ async def test_summarize_articles_matches_by_url_and_falls_back_to_snippet(monke
             title="Reuters story 0",
             snippet="Reuters snippet fallback.",
             source="Reuters",
-            reason="wire",
         ),
         CredibleArticle(
             url="https://bbc.com/news/1",
             title="BBC story 1",
             snippet="BBC snippet.",
             source="BBC",
-            reason="broadcaster",
         ),
     ]
     summaries = type(DEFAULT_SUMMARIES)(
@@ -257,6 +330,8 @@ async def test_summarize_articles_matches_by_url_and_falls_back_to_snippet(monke
         "https://bbc.com/news/1",
     ]
     assert digest.articles[0].summary == "Summary of the Reuters story."
+    summarize_call = next(c for c in client.chat.calls if "3 sentences" in c["messages"][1]["content"])
+    assert summarize_call["messages"][0]["content"].startswith("You are a news summarizer.")
 
     client_empty = FakeMistralClient({type(empty_summary): empty_summary})
     monkeypatch.setattr(activities, "_mistral_client", lambda: client_empty)
@@ -274,39 +349,22 @@ async def test_summarize_articles_empty_skips_llm(monkeypatch):
     assert digest.articles == []
 
 
+def test_input_accepts_comma_separated_string():
+    parsed = NewsDigestInput(topics=" ai , climate ,space")
+    assert parsed.topics == ["ai", "climate", "space"]
+
+
 def test_input_accepts_up_to_three_topics():
     assert NewsDigestInput(topics=[" ai ", "climate", "space"]).topics == ["ai", "climate", "space"]
 
 
 def test_input_rejects_more_than_three_topics():
     with pytest.raises(ValidationError):
-        NewsDigestInput(topics=["a", "b", "c", "d"])
+        NewsDigestInput(topics="a, b, c, d")
 
 
 def test_input_rejects_empty_topics():
     with pytest.raises(ValidationError):
         NewsDigestInput(topics=[])
     with pytest.raises(ValidationError):
-        NewsDigestInput(topics=["  ", ""])
-
-
-def test_validated_articles_keeps_candidate_snippets():
-    results = make_search_results("reuters.com", 2)
-    from worker.workflows.news.models import CredibleArticle, FilteredSources
-
-    filtered = FilteredSources(
-        articles=[
-            CredibleArticle(
-                url=results[0].url,
-                title="LLM title",
-                snippet="LLM snippet",
-                source="",
-                reason="r",
-            )
-        ]
-    )
-    articles = llm.validated_articles(filtered, results)
-    assert len(articles) == 1
-    assert articles[0].title == results[0].title
-    assert articles[0].snippet == results[0].snippet
-    assert articles[0].source == "reuters.com.example.com"
+        NewsDigestInput(topics="  , ")

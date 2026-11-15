@@ -2,15 +2,15 @@ import mistralai.workflows as workflows
 
 from worker.workflows.news.activities import (
     expand_search_queries,
-    filter_credible_sources,
     search_news,
     summarize_articles,
 )
+from worker.workflows.news.credibility import filter_credible_results
 from worker.workflows.news.models import (
     MAX_CANDIDATES_PER_TOPIC,
-    FilterRequest,
     NewsDigest,
     NewsDigestInput,
+    NO_CREDIBLE_RESULTS_NOTE,
     SearchRequest,
     SearchResult,
     SummaryRequest,
@@ -20,12 +20,14 @@ from worker.workflows.news.models import (
 
 @workflows.workflow.define(
     name="news-digest",
-    workflow_display_name="News Digest",
+    workflow_display_name="Personalized News Digest",
     workflow_description=(
-        "Finds relevant, credible news for up to three user-selected topics: expands each "
-        "topic into precise recent-news search queries, searches DuckDuckGo for the top "
-        "results, filters them down to trusted sources (at least two per topic when "
-        "available), and generates a concise summary for each selected link."
+        "Finds relevant news from trusted sources for up to three user-selected topics: "
+        "expands each topic into two precise search queries for breaking news and recent "
+        "developments from the last 7 days, searches DuckDuckGo for the top 5 results per "
+        "query, keeps only deduplicated results from established news outlets (at least "
+        "two per topic when available), and generates a neutral 3-sentence summary for "
+        "each article."
     ),
 )
 class NewsDigestWorkflow:
@@ -38,9 +40,20 @@ class NewsDigestWorkflow:
             for topic_queries in expansion.topics
             for query in topic_queries.queries
         ]
-        search_results = (
-            await workflows.execute_activities_in_parallel(search_news, items=search_requests)
-        ) or []
+        try:
+            search_results = (
+                await workflows.execute_activities_in_parallel(search_news, items=search_requests)
+            ) or []
+        except Exception as exc:
+            return NewsDigest(
+                generated_at=expansion.generated_at,
+                topics=[],
+                error=(
+                    "Web search failed, so no news digest could be generated: "
+                    f"{getattr(exc, 'message', None) or str(exc) or 'search step error'}. "
+                    "Please retry the run."
+                ),
+            )
 
         candidates: dict[str, list[SearchResult]] = {
             topic_queries.topic: [] for topic_queries in expansion.topics
@@ -56,32 +69,31 @@ class NewsDigestWorkflow:
                 seen_urls[topic].add(item.url)
                 candidates[topic].append(item)
 
-        filter_requests = [
-            FilterRequest(topic=topic_queries.topic, results=candidates[topic_queries.topic])
-            for topic_queries in expansion.topics
-        ]
-        filtered = (
-            await workflows.execute_activities_in_parallel(filter_credible_sources, items=filter_requests)
-        ) or []
-
-        queries_by_topic = {t.topic: t.queries for t in expansion.topics}
         summary_requests = [
             SummaryRequest(
-                topic=result.topic,
-                queries=queries_by_topic.get(result.topic, []),
-                articles=result.articles,
+                topic=topic_queries.topic,
+                queries=topic_queries.queries,
+                articles=filter_credible_results(candidates[topic_queries.topic]),
             )
-            for result in filtered
+            for topic_queries in expansion.topics
         ]
+        summary_requests = [request for request in summary_requests if request.articles]
         digests = (
             await workflows.execute_activities_in_parallel(summarize_articles, items=summary_requests)
+            if summary_requests
+            else []
         ) or []
 
         digests_by_topic = {digest.topic: digest for digest in digests}
         topics = [
             digests_by_topic.get(
                 topic_queries.topic,
-                TopicDigest(topic=topic_queries.topic, queries=topic_queries.queries, articles=[]),
+                TopicDigest(
+                    topic=topic_queries.topic,
+                    queries=topic_queries.queries,
+                    articles=[],
+                    note=NO_CREDIBLE_RESULTS_NOTE,
+                ),
             )
             for topic_queries in expansion.topics
         ]

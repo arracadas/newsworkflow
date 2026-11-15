@@ -6,6 +6,10 @@ from worker.workflows.news.models import MAX_RESULTS_PER_QUERY, SearchResult
 DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
 
+class SearchUnavailableError(RuntimeError):
+    """Raised when every DuckDuckGo endpoint fails, so callers can surface a clear error."""
+
+
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
@@ -132,14 +136,25 @@ async def search_duckduckgo(
         follow_redirects=True,
         headers=REQUEST_HEADERS,
     ) as client:
+        failures: list[str] = []
+        reached_ok = False
         for endpoint in (DDG_HTML_URL, DDG_LITE_URL):
             try:
                 response = await client.get(endpoint, params={"q": query})
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                failures.append(f"{endpoint}: {exc}")
                 continue
             if response.status_code != 200:
+                failures.append(f"{endpoint}: HTTP {response.status_code}")
                 continue
+            reached_ok = True
             results = parse_search_results(response.text, max_results)
             if results:
                 return results
+        if failures and not reached_ok:
+            raise SearchUnavailableError(
+                "Web search failed for query "
+                f"'{query}' (attempted DuckDuckGo html and lite endpoints): "
+                + "; ".join(failures)
+            )
     return []

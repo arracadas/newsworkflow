@@ -1,7 +1,6 @@
 from worker.workflows.news.models import (
     ArticleSummaries,
     ExpandedQueries,
-    FilteredSources,
     SearchResult,
 )
 
@@ -66,32 +65,6 @@ DEFAULT_EXPANSION = ExpandedQueries(
     topics=[
         {"topic": "ai", "queries": ["ai breaking news", "ai latest developments"]},
         {"topic": "climate", "queries": ["climate change news today"]},
-    ]
-)
-
-DEFAULT_FILTERED = FilteredSources(
-    articles=[
-        {
-            "url": "https://reuters.com/news/0",
-            "title": "Reuters story 0",
-            "snippet": "Reuters snippet 0.",
-            "source": "Reuters",
-            "reason": "Established wire service.",
-        },
-        {
-            "url": "https://bbc.com/news/1",
-            "title": "BBC story 1",
-            "snippet": "BBC snippet 1.",
-            "source": "BBC",
-            "reason": "Public broadcaster.",
-        },
-        {
-            "url": "https://hallucinated.example.com/fake",
-            "title": "Invented",
-            "snippet": "Not in candidates.",
-            "source": "blog",
-            "reason": "Should be dropped.",
-        },
     ]
 )
 

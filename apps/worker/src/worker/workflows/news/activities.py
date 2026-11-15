@@ -7,13 +7,10 @@ from worker.workflows.news.duckduckgo import search_duckduckgo
 from worker.workflows.news.models import (
     MAX_ARTICLES_PER_TOPIC,
     ArticleSummary,
-    CredibleArticle,
-    FilterRequest,
     QueryExpansion,
     SearchRequest,
     SummaryRequest,
     TopicDigest,
-    TopicFilterResult,
     TopicSearchResults,
 )
 
@@ -40,16 +37,6 @@ async def expand_search_queries(topics: list[str]) -> QueryExpansion:
 async def search_news(request: SearchRequest) -> TopicSearchResults:
     results = await search_duckduckgo(request.query, max_results=request.max_results)
     return TopicSearchResults(topic=request.topic, query=request.query, results=results)
-
-
-@workflows.activity(start_to_close_timeout=timedelta(minutes=2), retry_policy_max_attempts=2)
-async def filter_credible_sources(request: FilterRequest) -> TopicFilterResult:
-    if not request.results:
-        return TopicFilterResult(topic=request.topic, articles=[])
-    client = _mistral_client()
-    filtered = await llm.filter_sources(client, request)
-    articles = llm.validated_articles(filtered, request.results)
-    return TopicFilterResult(topic=request.topic, articles=articles)
 
 
 @workflows.activity(start_to_close_timeout=timedelta(minutes=3), retry_policy_max_attempts=2)
