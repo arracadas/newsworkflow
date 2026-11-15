@@ -18,6 +18,17 @@ from worker.workflows.news.models import (
 )
 
 
+def _failure_detail(exc: Exception) -> str:
+    details: list[str] = []
+    current: Exception | None = exc
+    while current is not None and len(details) < 6:
+        message = str(getattr(current, "message", None) or current)
+        if message and message not in details:
+            details.append(message)
+        current = getattr(current, "cause", None) or current.__cause__
+    return "; ".join(details)
+
+
 @workflows.workflow.define(
     name="news-digest",
     workflow_display_name="Personalized News Digest",
@@ -50,7 +61,7 @@ class NewsDigestWorkflow:
                 topics=[],
                 error=(
                     "Web search failed, so no news digest could be generated: "
-                    f"{getattr(exc, 'message', None) or str(exc) or 'search step error'}. "
+                    f"{_failure_detail(exc) or 'search step error'}. "
                     "Please retry the run."
                 ),
             )
