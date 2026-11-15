@@ -16,7 +16,7 @@ async def test_news_search_end_to_end(temporal_env, monkeypatch):
     monkeypatch.setattr(activities, "_mistral_client", lambda: ExplodingClient())
     monkeypatch.setattr(
         activities,
-        "search_duckduckgo",
+        "search_web",
         lambda query, max_results=5: _fake_search(query, max_results, fake_results),
     )
 
@@ -46,7 +46,7 @@ async def test_news_search_returns_fewer_when_engine_has_less(temporal_env, monk
     monkeypatch.setattr(activities, "_mistral_client", lambda: ExplodingClient())
     monkeypatch.setattr(
         activities,
-        "search_duckduckgo",
+        "search_web",
         lambda query, max_results=5: _fake_search(query, max_results, fake_results),
     )
 

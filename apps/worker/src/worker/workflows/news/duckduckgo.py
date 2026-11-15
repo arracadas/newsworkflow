@@ -118,6 +118,19 @@ def parse_search_results(html: str, max_results: int = MAX_RESULTS_PER_QUERY) ->
     return [result for result in results if result.title]
 
 
+async def search_web(
+    query: str,
+    max_results: int = MAX_RESULTS_PER_QUERY,
+    timeout: float = 20.0,
+) -> list[SearchResult]:
+    from worker.workflows.news.bing import search_bing_rss
+
+    results = await search_duckduckgo(query, max_results=max_results, timeout=timeout)
+    if results:
+        return results
+    return await search_bing_rss(query, max_results=max_results, timeout=timeout)
+
+
 async def search_duckduckgo(
     query: str,
     max_results: int = MAX_RESULTS_PER_QUERY,
