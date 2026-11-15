@@ -3,6 +3,11 @@
 An intelligent [Mistral Workflow](https://docs.mistral.ai/studio/workflows/overview) that finds
 relevant news from trusted sources based on the user's interests.
 
+## `news-search`
+
+A simple workflow with a manual trigger: given a single `topic` input, it runs a web search for
+recent news about it and returns the top 5 results, each with `title`, `url`, and `snippet`.
+
 The user chooses **up to three topics**. The `news-digest` workflow then:
 
 1. **Query expansion** — an LLM (system prompt: recent/breaking news only, no year, 2026 or
