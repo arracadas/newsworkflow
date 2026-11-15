@@ -1,18 +1,31 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 MAX_TOPICS = 3
-MAX_QUERIES_PER_TOPIC = 5
+QUERIES_PER_TOPIC = 2
 MAX_RESULTS_PER_QUERY = 5
 MAX_CANDIDATES_PER_TOPIC = 10
 MAX_ARTICLES_PER_TOPIC = 5
+
+NO_CREDIBLE_RESULTS_NOTE = "no credible recent results"
 
 
 class NewsDigestInput(BaseModel):
     topics: list[str] = Field(
         min_length=1,
         max_length=MAX_TOPICS,
-        description="The user's interests: up to three topics to search news for.",
+        description=(
+            "The user's interests: 1-3 comma-separated topics to search news for."
+        ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _split_comma_separated(cls, value):
+        if isinstance(value, str):
+            value = {"topics": [part for part in value.split(",")]}
+        if isinstance(value, dict) and isinstance(value.get("topics"), str):
+            value = {**value, "topics": value["topics"].split(",")}
+        return value
 
     @field_validator("topics")
     @classmethod
@@ -31,7 +44,7 @@ class SearchResult(BaseModel):
 
 class TopicQueries(BaseModel):
     topic: str
-    queries: list[str] = Field(min_length=1, max_length=MAX_QUERIES_PER_TOPIC)
+    queries: list[str] = Field(min_length=1, max_length=QUERIES_PER_TOPIC)
 
 
 class ExpandedQueries(BaseModel):
@@ -55,26 +68,11 @@ class TopicSearchResults(BaseModel):
     results: list[SearchResult]
 
 
-class FilterRequest(BaseModel):
-    topic: str
-    results: list[SearchResult]
-
-
 class CredibleArticle(BaseModel):
     url: str
     title: str
     snippet: str
     source: str
-    reason: str
-
-
-class FilteredSources(BaseModel):
-    articles: list[CredibleArticle]
-
-
-class TopicFilterResult(BaseModel):
-    topic: str
-    articles: list[CredibleArticle]
 
 
 class SummaryRequest(BaseModel):
@@ -99,8 +97,10 @@ class TopicDigest(BaseModel):
     topic: str
     queries: list[str]
     articles: list[ArticleSummary]
+    note: str | None = None
 
 
 class NewsDigest(BaseModel):
     generated_at: str
     topics: list[TopicDigest]
+    error: str | None = None
